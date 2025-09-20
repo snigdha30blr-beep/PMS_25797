@@ -1,0 +1,128 @@
+import streamlit as st
+import backend as db
+import datetime
+
+# Helper function for user authentication (simplistic)
+def authenticate_user(username):
+    # This is a basic example; a real app would use a secure auth system
+    if username == "manager":
+        return {"id": 1, "name": "Manager John", "role": "manager"}
+    elif username == "employee":
+        return {"id": 2, "name": "Employee Jane", "role": "employee"}
+    return None
+
+def main():
+    st.title("Performance Management System 📊")
+    
+    # User Authentication
+    username = st.sidebar.text_input("Enter your username (manager/employee)")
+    user = authenticate_user(username)
+
+    if not user:
+        st.warning("Please enter a valid username.")
+        return
+    
+    st.sidebar.success(f"Welcome, {user['name']}!")
+    
+    # Initialize the database on first run
+    db.init_db()
+
+    # Create tabs for different functionalities
+    tab1, tab2, tab3, tab4 = st.tabs(["Goals & Tasks", "Feedback", "Performance History", "Business Insights"])
+
+    # --- Tab 1: Goal & Task Setting and Tracking ---
+    with tab1:
+        st.header("🎯 Goal & Task Management")
+        if user['role'] == 'manager':
+            # Create a new goal
+            st.subheader("Set a New Goal")
+            with st.form("goal_form", clear_on_submit=True):
+                employee_id = st.number_input("Employee ID", min_value=1)
+                goal_description = st.text_area("Goal Description")
+                due_date = st.date_input("Due Date", datetime.date.today())
+                submit_button = st.form_submit_button("Set Goal")
+                if submit_button:
+                    db.create_goal(user['id'], employee_id, goal_description, due_date)
+                    st.success(f"Goal set for Employee ID {employee_id}!")
+
+            st.subheader("Update Goal Status")
+            goals = db.read_goals(manager_id=user['id'])
+            if not goals.empty:
+                goal_id = st.selectbox("Select Goal to Update", goals['goal_id'], format_func=lambda x: f"Goal ID: {x}")
+                new_status = st.selectbox("New Status", ['Draft', 'In Progress', 'Completed', 'Cancelled'])
+                if st.button("Update Status"):
+                    db.update_goal_status(goal_id, new_status)
+                    st.success("Goal status updated!")
+            else:
+                st.info("No goals to display.")
+        
+        # View goals for both managers and employees
+        st.subheader("Your Current Goals")
+        goals_data = db.read_goals(employee_id=user['id']) if user['role'] == 'employee' else db.read_goals(manager_id=user['id'])
+        st.dataframe(goals_data)
+
+        # Employee Task Logging
+        if user['role'] == 'employee':
+            st.subheader("Log a New Task for a Goal")
+            goals_for_tasks = db.read_goals(employee_id=user['id'])
+            if not goals_for_tasks.empty:
+                goal_id = st.selectbox("Select Goal", goals_for_tasks['goal_id'], format_func=lambda x: f"Goal ID: {x}")
+                task_description = st.text_area("Task Description")
+                if st.button("Log Task"):
+                    db.create_task(goal_id, user['id'], task_description)
+                    st.success("Task logged for manager's approval.")
+            else:
+                st.info("No goals to log tasks for.")
+                
+            st.subheader("Your Logged Tasks")
+            tasks_data = db.read_tasks(employee_id=user['id'])
+            st.dataframe(tasks_data)
+
+    # --- Tab 2: Feedback ---
+    with tab2:
+        st.header("📝 Provide Feedback")
+        if user['role'] == 'manager':
+            employees_goals = db.read_goals(manager_id=user['id'])
+            if not employees_goals.empty:
+                goal_id = st.selectbox("Select a Goal to give Feedback on", employees_goals['goal_id'], format_func=lambda x: f"Goal ID: {x}")
+                employee_id = employees_goals[employees_goals['goal_id'] == goal_id]['employee_id'].iloc[0]
+                feedback_text = st.text_area("Write your feedback here")
+                if st.button("Submit Feedback"):
+                    db.create_feedback(goal_id, user['id'], employee_id, feedback_text)
+                    st.success("Feedback submitted!")
+            else:
+                st.info("No goals to provide feedback on.")
+
+    # --- Tab 3: Performance History ---
+    with tab3:
+        st.header("🕰️ Performance History")
+        if user['role'] == 'employee':
+            st.subheader("Your Goal History")
+            goals_history = db.read_goals(employee_id=user['id'])
+            st.dataframe(goals_history)
+
+            st.subheader("Your Feedback History")
+            feedback_history = db.read_feedback(employee_id=user['id'])
+            st.dataframe(feedback_history)
+        else:
+            st.info("Performance history is for employees.")
+
+    # --- Tab 4: Business Insights ---
+    with tab4:
+        st.header("📈 Business Insights")
+        insights = db.get_business_insights()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Goals", insights.get('total_goals', 0))
+            st.metric("Average Goals per Employee", f"{insights.get('avg_goals_per_employee', 0):.2f}")
+        with col2:
+            st.metric("First Goal Due Date", insights.get('min_due_date', "N/A"))
+            st.metric("Last Goal Due Date", insights.get('max_due_date', "N/A"))
+
+        st.subheader("Goals by Status")
+        goals_status_df = pd.DataFrame(insights.get('goals_by_status', {}).items(), columns=['Status', 'Count'])
+        st.bar_chart(goals_status_df.set_index('Status'))
+
+if __name__ == "__main__":
+    main()
