@@ -1,0 +1,67 @@
+-- Create the 'employees' table to store user information
+CREATE TABLE employees (
+    employee_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    is_manager BOOLEAN DEFAULT FALSE
+);
+
+-- Create the 'goals' table to store individual goals
+CREATE TABLE goals (
+    goal_id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES employees(employee_id),
+    employee_id INTEGER REFERENCES employees(employee_id),
+    description TEXT NOT NULL,
+    due_date DATE NOT NULL,
+    status VARCHAR(50) DEFAULT 'Draft',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create the 'tasks' table to log sub-tasks for a goal
+CREATE TABLE tasks (
+    task_id SERIAL PRIMARY KEY,
+    goal_id INTEGER REFERENCES goals(goal_id) ON DELETE CASCADE,
+    employee_id INTEGER REFERENCES employees(employee_id),
+    description TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'Pending Approval',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create the 'feedback' table for manager feedback on goals
+CREATE TABLE feedback (
+    feedback_id SERIAL PRIMARY KEY,
+    goal_id INTEGER REFERENCES goals(goal_id) ON DELETE CASCADE,
+    manager_id INTEGER REFERENCES employees(employee_id),
+    employee_id INTEGER REFERENCES employees(employee_id),
+    feedback_text TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --- Triggers for Automated Feedback ---
+-- This trigger automatically adds a 'Goal Completed' feedback entry when a goal's status is updated to 'Completed'
+CREATE OR REPLACE FUNCTION add_goal_completion_feedback()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.status <> 'Completed' AND NEW.status = 'Completed' THEN
+        INSERT INTO feedback (goal_id, manager_id, employee_id, feedback_text)
+        VALUES (
+            NEW.goal_id,
+            NEW.manager_id,
+            NEW.employee_id,
+            'Automated Feedback: Goal successfully completed. Great work!'
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER goal_completion_trigger
+AFTER UPDATE OF status ON goals
+FOR EACH ROW
+EXECUTE FUNCTION add_goal_completion_feedback();
+
+-- --- Indexing for Performance ---
+-- Create indexes to speed up common queries based on employee and goal IDs
+CREATE INDEX idx_goals_employee_id ON goals(employee_id);
+CREATE INDEX idx_goals_manager_id ON goals(manager_id);
+CREATE INDEX idx_tasks_goal_id ON tasks(goal_id);
+CREATE INDEX idx_feedback_employee_id ON feedback(employee_id);
