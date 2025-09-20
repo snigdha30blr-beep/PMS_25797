@@ -1,0 +1,186 @@
+import psycopg2
+import streamlit as st
+import pandas as pd
+
+# Database connection details from Streamlit secrets
+@st.cache_resource
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(
+            host=st.secrets["postgres"]["localhost"],
+            database=st.secrets["postgres"]["PMS"],
+            user=st.secrets["postgres"]["postgres"],
+            password=st.secrets["postgres"]["Sweety2002"]
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return None
+
+# Initialize the database and create tables
+def init_db():
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS employees (
+                    employee_id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    is_manager BOOLEAN DEFAULT FALSE
+                );
+                CREATE TABLE IF NOT EXISTS goals (
+                    goal_id SERIAL PRIMARY KEY,
+                    manager_id INTEGER REFERENCES employees(employee_id),
+                    employee_id INTEGER REFERENCES employees(employee_id),
+                    description TEXT NOT NULL,
+                    due_date DATE NOT NULL,
+                    status VARCHAR(50) DEFAULT 'Draft'
+                );
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id SERIAL PRIMARY KEY,
+                    goal_id INTEGER REFERENCES goals(goal_id),
+                    employee_id INTEGER REFERENCES employees(employee_id),
+                    description TEXT NOT NULL,
+                    status VARCHAR(50) DEFAULT 'Pending Approval'
+                );
+                CREATE TABLE IF NOT EXISTS feedback (
+                    feedback_id SERIAL PRIMARY KEY,
+                    goal_id INTEGER REFERENCES goals(goal_id),
+                    manager_id INTEGER REFERENCES employees(employee_id),
+                    employee_id INTEGER REFERENCES employees(employee_id),
+                    feedback_text TEXT NOT NULL
+                );
+            """)
+        conn.commit()
+        conn.close()
+
+# --- CRUD Operations for Goals ---
+def create_goal(manager_id, employee_id, description, due_date):
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO goals (manager_id, employee_id, description, due_date) VALUES (%s, %s, %s, %s) RETURNING goal_id",
+                (manager_id, employee_id, description, due_date)
+            )
+            goal_id = cur.fetchone()[0]
+            conn.commit()
+            return goal_id
+        
+def read_goals(employee_id=None, manager_id=None):
+    conn = get_db_connection()
+    if conn:
+        query = "SELECT * FROM goals"
+        params = []
+        where_clauses = []
+        if employee_id:
+            where_clauses.append("employee_id = %s")
+            params.append(employee_id)
+        if manager_id:
+            where_clauses.append("manager_id = %s")
+            params.append(manager_id)
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+        
+        df = pd.read_sql(query, conn, params=params)
+        conn.close()
+        return df
+
+def update_goal_status(goal_id, new_status):
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE goals SET status = %s WHERE goal_id = %s",
+                (new_status, goal_id)
+            )
+        conn.commit()
+        conn.close()
+
+def delete_goal(goal_id):
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM goals WHERE goal_id = %s", (goal_id,))
+        conn.commit()
+        conn.close()
+
+# --- CRUD Operations for Tasks ---
+def create_task(goal_id, employee_id, description):
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tasks (goal_id, employee_id, description) VALUES (%s, %s, %s) RETURNING task_id",
+                (goal_id, employee_id, description)
+            )
+            task_id = cur.fetchone()[0]
+            conn.commit()
+            return task_id
+        
+def read_tasks(goal_id=None, employee_id=None):
+    conn = get_db_connection()
+    if conn:
+        query = "SELECT * FROM tasks"
+        params = []
+        where_clauses = []
+        if goal_id:
+            where_clauses.append("goal_id = %s")
+            params.append(goal_id)
+        if employee_id:
+            where_clauses.append("employee_id = %s")
+            params.append(employee_id)
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+        
+        df = pd.read_sql(query, conn, params=params)
+        conn.close()
+        return df
+
+# --- CRUD Operations for Feedback ---
+def create_feedback(goal_id, manager_id, employee_id, feedback_text):
+    conn = get_db_connection()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO feedback (goal_id, manager_id, employee_id, feedback_text) VALUES (%s, %s, %s, %s) RETURNING feedback_id",
+                (goal_id, manager_id, employee_id, feedback_text)
+            )
+            feedback_id = cur.fetchone()[0]
+            conn.commit()
+            return feedback_id
+
+def read_feedback(employee_id):
+    conn = get_db_connection()
+    if conn:
+        query = "SELECT * FROM feedback WHERE employee_id = %s"
+        df = pd.read_sql(query, conn, params=(employee_id,))
+        conn.close()
+        return df
+
+# --- Business Insights ---
+def get_business_insights():
+    conn = get_db_connection()
+    if conn:
+        insights = {}
+        with conn.cursor() as cur:
+            # Total Goals
+            cur.execute("SELECT COUNT(*) FROM goals")
+            insights['total_goals'] = cur.fetchone()[0]
+            
+            # Goals by Status
+            cur.execute("SELECT status, COUNT(*) FROM goals GROUP BY status")
+            insights['goals_by_status'] = dict(cur.fetchall())
+            
+            # Average Goals per Employee
+            cur.execute("SELECT COUNT(*)::float / COUNT(DISTINCT employee_id) FROM goals")
+            insights['avg_goals_per_employee'] = cur.fetchone()[0]
+            
+            # Min and Max Due Dates
+            cur.execute("SELECT MIN(due_date), MAX(due_date) FROM goals")
+            min_date, max_date = cur.fetchone()
+            insights['min_due_date'] = min_date
+            insights['max_due_date'] = max_date
+
+        conn.close()
+        return insights
